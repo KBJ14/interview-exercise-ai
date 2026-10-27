@@ -196,7 +196,6 @@ When you are ready to submit:
 
 ## Rules & Integrity
 
-- **AI coding tools are not permitted.** Do not use Claude, ChatGPT, GitHub Copilot, or similar tools to write or generate code for this submission. You may use them for general research (e.g., looking up library docs or concepts), but the code must be your own. We will discuss your implementation in depth during the follow-up session — be prepared to explain every decision.
 - You may use any libraries or frameworks you're comfortable with — we're more interested in your decision-making than your choice of HTTP framework
 - Local models via Ollama are preferred but not required — if you use a paid API (OpenAI, Anthropic), note the cost implications in your README
 - If you run out of time, document what you would have done next — an honest README is valued over incomplete code with no context
