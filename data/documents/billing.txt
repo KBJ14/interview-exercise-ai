@@ -1,0 +1,18 @@
+[FICTIONAL DOCUMENT - Quillbox is a fictional SaaS product created for RAG practice. None of these policies describe a real service.]
+
+Quillbox Billing, Refunds, and Subscription Cancellation
+
+Billing Cycles and Payment
+Paid Quillbox plans (Pro and Team) are billed either monthly or annually, and you choose the cycle when you subscribe. Charges are made at the start of each billing period, and subscriptions renew automatically on the same calendar day each month or year. Quillbox accepts major credit and debit cards for all paid plans. Team customers on annual billing with 20 or more users can also request payment by invoice, with payment due within 30 days of the invoice date. All prices are listed in US dollars and exclude applicable sales tax or VAT, which is added at checkout based on your billing address.
+
+Changing Plans
+Upgrades take effect immediately. When you upgrade, for example from Pro to Team or from monthly to annual billing, you are charged a prorated amount for the remainder of the current billing period. Downgrades, such as moving from Team to Pro, take effect at the end of the current billing period, and no partial refund is issued for the remaining time on the higher plan. Adding users to a paid workspace is charged on a prorated basis, while removing users lowers the price starting from the next billing period.
+
+Failed Payments
+If a renewal payment fails, Quillbox retries the charge 3 times over the following 7 days and sends an email notice after each failed attempt. Your paid features remain available during this 7-day retry period. If all retries fail, the subscription is canceled and the workspace is moved to the Free plan. Your data is not deleted when this happens, but the limits of the Free plan apply, as described in the Plans and Usage Limits document.
+
+Refund Policy
+First-time paid subscriptions are eligible for a full refund if you request it within 14 days of the initial purchase. Annual renewals are eligible for a full refund if requested within 14 days of the renewal charge. Monthly renewals are not refundable, and partial refunds are not given for unused time after these 14-day windows. Duplicate charges and billing errors caused by Quillbox are always refunded in full, regardless of when they are reported. To request a refund, contact support from Settings > Billing > Request refund, and approved refunds are returned to the original payment method within 5 to 10 business days.
+
+Canceling a Subscription
+You can cancel a paid subscription at any time from Settings > Billing > Cancel subscription. Canceling stops future renewals, but your paid features remain active until the end of the current billing period. When that period ends, the workspace moves to the Free plan automatically. Canceling a subscription does not delete your account or your data; you can still sign in, view your files, and upgrade again later. Deleting your account is a separate action with different consequences, and it is described in the Account and Data Management document.

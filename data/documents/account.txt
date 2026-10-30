@@ -1,0 +1,18 @@
+[FICTIONAL DOCUMENT - Quillbox is a fictional SaaS product created for RAG practice. None of these policies describe a real service.]
+
+Quillbox Account and Data Management
+
+Resetting Your Password
+If you forget your password, select "Forgot password" on the sign-in page and enter the email address associated with your account. Quillbox sends a reset link to that address, and the link expires 60 minutes after it is sent. Each link can be used only once, and you can request at most 5 reset emails per hour. After you set a new password, all other active sessions are signed out for security. If your Team workspace uses single sign-on (SSO), your password is managed by your organization's identity provider, so you must reset it there instead of in Quillbox.
+
+Exporting Your Data
+You can export your data at any time from Settings > Account > Export data, on every plan, including Free. The export is delivered as a ZIP file containing your documents in Markdown format and your uploaded files in their original formats. Quillbox emails a download link when the export is ready, and the link remains valid for 7 days. We recommend exporting your data before deleting your account, because exports are not available once deletion has been requested.
+
+Deleting Your Account
+Deleting your account is different from canceling a subscription. Canceling only stops billing and moves you to the Free plan, while deleting your account locks it immediately and permanently removes your profile and your data after a 30-day grace period. To delete your account, go to Settings > Account > Delete account and confirm with your password. If you have an active paid subscription, deleting your account cancels it immediately, and paid features end at that moment rather than at the end of the billing period. Account deletion does not automatically trigger a refund; refund eligibility follows the 14-day rules in the Billing and Subscriptions document. If you are the only owner of a workspace that has other members, you must transfer ownership to another member or remove all members before the account can be deleted.
+
+Deletion Grace Period
+After you request deletion, your account enters a 30-day grace period. During this time you can sign in only to cancel the deletion by selecting "Restore account"; all other use, including viewing files and exporting data, is unavailable. Restoring brings back all documents and files, but the account returns on the Free plan, because any paid subscription was already canceled when deletion was requested. After 30 days, the account and all of its documents and files are permanently deleted and cannot be recovered. Residual copies in encrypted backups are purged within 60 more days, so your profile, documents, and files are fully removed within 90 days of the original deletion request. Billing records are the only exception, as described in Data Retention below.
+
+Data Retention
+While your account exists, Quillbox keeps your data for as long as the account remains active, on every plan. A Free account with no sign-in activity for 24 months receives an email warning, and if no one signs in within 30 days of that warning, the account is scheduled for deletion and follows the same 30-day grace period described above. Paid accounts are never deleted for inactivity while the subscription is active. Billing records such as invoices and payment history are the only exception to the 90-day removal: they are kept for 7 years after account deletion, because they are required for tax and legal purposes, but they do not include the contents of your documents.
