@@ -1,3 +1,9 @@
+> **About this repository:** a personal practice project for learning AI development tools (such as Claude Code) while building the system below. It is not a challenge submission.
+> The challenge text below is kept as the project brief.
+>
+> - Setup and run: [docs/run-guide.md](docs/run-guide.md)
+> - Part 1 design: [docs/part1-design.md](docs/part1-design.md)
+
 # Take-Home Challenge: AI Knowledge Assistant
 
 **Role:** Intermediate AI Engineer  
@@ -196,7 +202,6 @@ When you are ready to submit:
 
 ## Rules & Integrity
 
-- **AI coding tools are not permitted.** Do not use Claude, ChatGPT, GitHub Copilot, or similar tools to write or generate code for this submission. You may use them for general research (e.g., looking up library docs or concepts), but the code must be your own. We will discuss your implementation in depth during the follow-up session — be prepared to explain every decision.
 - You may use any libraries or frameworks you're comfortable with — we're more interested in your decision-making than your choice of HTTP framework
 - Local models via Ollama are preferred but not required — if you use a paid API (OpenAI, Anthropic), note the cost implications in your README
 - If you run out of time, document what you would have done next — an honest README is valued over incomplete code with no context
