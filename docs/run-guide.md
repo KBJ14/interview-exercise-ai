@@ -97,6 +97,38 @@ The code validates the output format and citation labels, not factual accuracy.
 
 Optional settings: `RAG_GENERATION_MODEL` (default `gpt-6-luna`), `RAG_REASONING_EFFORT` (default `low`).
 
+## 10. Go API (Part 2: `POST /query`)
+
+The public API is a Go server that validates requests and forwards them to the Python service's `POST /internal/query`.
+It needs Go 1.22+ and uses only the standard library.
+
+Start the Python service (port 8000) and the Go API (port 8080) in two terminals:
+
+```bash
+.venv/bin/uvicorn rag.api:app --host 127.0.0.1 --port 8000
+go run ./cmd/api
+```
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `API_ADDR` | `:8080` | Go API listen address |
+| `RAG_SERVICE_URL` | `http://127.0.0.1:8000` | Base URL of the Python service |
+| `RAG_TIMEOUT` | `60s` | Limit for one call to the Python service (Go duration, e.g. `30s`) |
+
+Without API calls (rejected by Go before Python is called):
+
+```bash
+curl -s -H 'Content-Type: application/json' -d '{"question":"  "}' http://127.0.0.1:8080/query
+```
+
+With API calls (1 embedding + 1 generation request):
+
+```bash
+curl -s -H 'Content-Type: application/json' -d '{"question":"Can I get a refund for a monthly renewal charge?","k":3}' http://127.0.0.1:8080/query
+```
+
+Tests: `go test ./...` and `go vet ./...` (the Python service is replaced by `httptest` fakes; no API calls).
+
 ## Stopping and resetting
 
 ```bash

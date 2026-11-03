@@ -23,6 +23,10 @@ class EmbeddingError(RuntimeError):
     """The API answered, but not with what the schema expects."""
 
 
+class ConfigurationError(EmbeddingError):
+    """Local setup is missing (e.g. no API key); no request was sent."""
+
+
 @dataclass(frozen=True)
 class EmbeddingResult:
     model: str
@@ -34,7 +38,7 @@ class EmbeddingResult:
 def make_client() -> OpenAI:
     # Checked here so a missing key fails with a clear message instead of an SDK traceback.
     if not os.environ.get("OPENAI_API_KEY"):
-        raise EmbeddingError("OPENAI_API_KEY is not set (expected from ~/.config/openai/env)")
+        raise ConfigurationError("OPENAI_API_KEY is not set (expected from ~/.config/openai/env)")
     return OpenAI(max_retries=MAX_RETRIES, timeout=TIMEOUT_SECONDS)
 
 
