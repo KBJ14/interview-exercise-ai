@@ -70,7 +70,7 @@ func reply(status int, body string) http.HandlerFunc {
 
 func newAPI(ragURL string, timeout time.Duration) http.Handler {
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return httpapi.NewServer(ragclient.New(ragURL, timeout), quiet)
+	return httpapi.NewServer(ragclient.New(ragURL, timeout), nil, quiet) // /query never touches documents
 }
 
 func post(api http.Handler, body string) *httptest.ResponseRecorder {

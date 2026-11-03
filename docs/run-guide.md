@@ -97,10 +97,10 @@ The code validates the output format and citation labels, not factual accuracy.
 
 Optional settings: `RAG_GENERATION_MODEL` (default `gpt-6-luna`), `RAG_REASONING_EFFORT` (default `low`).
 
-## 10. Go API (Part 2: `POST /query`)
+## 10. Go API (Part 2: `POST /query`, `GET /documents`)
 
-The public API is a Go server that validates requests and forwards them to the Python service's `POST /internal/query`.
-It needs Go 1.22+ and uses only the standard library.
+The public API is a Go server. `POST /query` validates requests and forwards them to the Python service's `POST /internal/query`; `GET /documents` reads document metadata directly from the same PostgreSQL database.
+It needs Go 1.22+; the only third-party dependency is the PostgreSQL driver `github.com/jackc/pgx/v5` (v5.7.4, the newest release that supports Go 1.22).
 
 Start the Python service (port 8000) and the Go API (port 8080) in two terminals:
 
@@ -114,11 +114,18 @@ go run ./cmd/api
 | `API_ADDR` | `:8080` | Go API listen address |
 | `RAG_SERVICE_URL` | `http://127.0.0.1:8000` | Base URL of the Python service |
 | `RAG_TIMEOUT` | `60s` | Limit for one call to the Python service (Go duration, e.g. `30s`) |
+| `DB_QUERY_TIMEOUT` | `5s` | Limit for one database query |
+| `DATABASE_URL` | unset | `postgres://` URL; overrides the `POSTGRES_*` settings below |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | from `.env` | Required when `DATABASE_URL` is unset |
+| `POSTGRES_HOST`, `POSTGRES_PORT` | `localhost`, `5432` (or `.env`) | Database address |
 
-Without API calls (rejected by Go before Python is called):
+Database settings follow `rag/db.py`: environment variables win over `./.env`, so running from the repository root uses the same database as the Python service. The password is never logged; the startup log shows only `host:port/dbname`.
+
+Without API calls:
 
 ```bash
-curl -s -H 'Content-Type: application/json' -d '{"question":"  "}' http://127.0.0.1:8080/query
+curl -s http://127.0.0.1:8080/documents        # metadata only (id, title, source, content_hash, created_at), newest first
+curl -s -H 'Content-Type: application/json' -d '{"question":"  "}' http://127.0.0.1:8080/query   # rejected by Go
 ```
 
 With API calls (1 embedding + 1 generation request):
@@ -127,7 +134,7 @@ With API calls (1 embedding + 1 generation request):
 curl -s -H 'Content-Type: application/json' -d '{"question":"Can I get a refund for a monthly renewal charge?","k":3}' http://127.0.0.1:8080/query
 ```
 
-Tests: `go test ./...` and `go vet ./...` (the Python service is replaced by `httptest` fakes; no API calls).
+Tests: `go test ./...` and `go vet ./...`. The Python service is replaced by `httptest` fakes (no API calls). The `internal/store` tests use the real database inside rolled-back transactions and are skipped if it is not running.
 
 ## Stopping and resetting
 

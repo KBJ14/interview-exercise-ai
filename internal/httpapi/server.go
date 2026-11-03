@@ -16,17 +16,20 @@ type Querier interface {
 }
 
 type Server struct {
-	rag Querier
-	log *slog.Logger
+	rag  Querier
+	docs DocumentLister
+	log  *slog.Logger
 }
 
 // NewServer returns the API's HTTP handler.
-func NewServer(rag Querier, log *slog.Logger) http.Handler {
-	s := &Server{rag: rag, log: log}
+func NewServer(rag Querier, docs DocumentLister, log *slog.Logger) http.Handler {
+	s := &Server{rag: rag, docs: docs, log: log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /query", s.handleQuery)
+	mux.HandleFunc("GET /documents", s.handleListDocuments)
 	// Without these, ServeMux answers 404/405 in plain text; keep the JSON error shape everywhere.
 	mux.HandleFunc("/query", methodNotAllowed(http.MethodPost))
+	mux.HandleFunc("/documents", methodNotAllowed(http.MethodGet, http.MethodHead))
 	mux.HandleFunc("/", notFound)
 	return mux
 }
