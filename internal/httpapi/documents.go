@@ -4,15 +4,21 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/KBJ14/interview-exercise-ai/internal/store"
 )
 
-// DocumentLister is the metadata source the handlers depend on; *store.Store implements it.
-type DocumentLister interface {
+// DocumentStore is the metadata store the handlers depend on; *store.Store implements it.
+type DocumentStore interface {
 	ListDocuments(ctx context.Context) ([]store.Document, error)
+	DeleteDocument(ctx context.Context, id int64) (bool, error)
 }
+
+// Canonical positive decimal only: rejects 0, -1, +1, 007, 1.0 and 1e3 before any parsing.
+var documentID = regexp.MustCompile(`^[1-9][0-9]*$`)
 
 // DocumentsResponse is the public body of GET /documents.
 type DocumentsResponse struct {
@@ -42,6 +48,29 @@ func (s *Server) handleListDocuments(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleDeleteDocument(w http.ResponseWriter, r *http.Request) {
+	raw := r.PathValue("id")
+	// documents.id is BIGINT; ParseInt with bitSize 64 rejects anything above its maximum.
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if !documentID.MatchString(raw) || err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_document_id",
+			"document id must be a positive integer no greater than 9223372036854775807")
+		return
+	}
+
+	deleted, err := s.docs.DeleteDocument(r.Context(), id)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	if !deleted {
+		writeError(w, http.StatusNotFound, "document_not_found", "no document with this id")
+		return
+	}
+	s.log.Info("document deleted", "id", id)
+	w.WriteHeader(http.StatusNoContent) // no body, no Content-Type
 }
 
 func (s *Server) writeStoreError(w http.ResponseWriter, r *http.Request, err error) {

@@ -21,6 +21,10 @@ type fakeLister struct {
 	docs  []store.Document
 	err   error
 	calls int
+
+	deleted     bool  // DeleteDocument result
+	deleteErr   error // DeleteDocument error
+	deleteCalls []int64
 }
 
 func (f *fakeLister) ListDocuments(context.Context) ([]store.Document, error) {
@@ -28,7 +32,12 @@ func (f *fakeLister) ListDocuments(context.Context) ([]store.Document, error) {
 	return f.docs, f.err
 }
 
-func docsAPI(lister httpapi.DocumentLister) http.Handler {
+func (f *fakeLister) DeleteDocument(_ context.Context, id int64) (bool, error) {
+	f.deleteCalls = append(f.deleteCalls, id)
+	return f.deleted, f.deleteErr
+}
+
+func docsAPI(lister httpapi.DocumentStore) http.Handler {
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return httpapi.NewServer(nil, lister, quiet) // /documents never calls the RAG service
 }

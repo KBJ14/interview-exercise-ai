@@ -1,5 +1,5 @@
-// Package store reads document metadata from the PostgreSQL database shared with the Python
-// RAG service. The Python service owns writes (ingestion); this package only reads.
+// Package store reads and deletes document metadata in the PostgreSQL database shared with the
+// Python RAG service. The Python service owns ingestion; this package lists and deletes.
 package store
 
 import (
@@ -36,6 +36,7 @@ type Document struct {
 // transaction that is rolled back.
 type DBTX interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
 type Store struct {
@@ -61,7 +62,7 @@ func (s *Store) ListDocuments(ctx context.Context) ([]Document, error) {
 
 	rows, err := s.db.Query(ctx, listDocumentsSQL)
 	if err != nil {
-		return nil, classify(ctx, err)
+		return nil, classify(ctx, "list documents", err)
 	}
 	docs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Document, error) {
 		var d Document
@@ -69,12 +70,30 @@ func (s *Store) ListDocuments(ctx context.Context) ([]Document, error) {
 		return d, err
 	})
 	if err != nil {
-		return nil, classify(ctx, err)
+		return nil, classify(ctx, "list documents", err)
 	}
 	if docs == nil {
 		docs = []Document{}
 	}
 	return docs, nil
+}
+
+// embeddings.document_id references documents(id) ON DELETE CASCADE (schema.sql), so this one
+// statement removes the document and all of its chunks atomically.
+const deleteDocumentSQL = `DELETE FROM documents WHERE id = $1`
+
+// DeleteDocument removes the document with the given id and, through the cascade, its
+// embeddings. It reports false when no such document exists. Existence comes from the
+// affected row count, so there is no separate lookup that could race with another delete.
+func (s *Store) DeleteDocument(ctx context.Context, id int64) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	tag, err := s.db.Exec(ctx, deleteDocumentSQL, id)
+	if err != nil {
+		return false, classify(ctx, "delete document", err)
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // SQLSTATE codes that describe a temporary condition on a reachable server.
@@ -87,7 +106,7 @@ var transientCodes = map[string]bool{
 
 // classify separates failures the caller can retry (unavailable, timeout) and a caller that
 // left (canceled) from everything else, which is returned wrapped and treated as internal.
-func classify(ctx context.Context, err error) error {
+func classify(ctx context.Context, op string, err error) error {
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return fmt.Errorf("%w: %v", ErrTimeout, err)
@@ -102,7 +121,7 @@ func classify(ctx context.Context, err error) error {
 		if transientCodes[pgErr.Code] || pgErr.Code[:2] == "08" {
 			return fmt.Errorf("%w: SQLSTATE %s", ErrUnavailable, pgErr.Code)
 		}
-		return fmt.Errorf("query documents: SQLSTATE %s: %s", pgErr.Code, pgErr.Message)
+		return fmt.Errorf("%s: SQLSTATE %s: %s", op, pgErr.Code, pgErr.Message)
 	}
 
 	var connectErr *pgconn.ConnectError
@@ -110,5 +129,5 @@ func classify(ctx context.Context, err error) error {
 	if errors.As(err, &connectErr) || errors.As(err, &netErr) || pgconn.Timeout(err) {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
-	return fmt.Errorf("query documents: %w", err)
+	return fmt.Errorf("%s: %w", op, err)
 }

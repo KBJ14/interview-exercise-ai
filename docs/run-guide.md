@@ -97,9 +97,9 @@ The code validates the output format and citation labels, not factual accuracy.
 
 Optional settings: `RAG_GENERATION_MODEL` (default `gpt-6-luna`), `RAG_REASONING_EFFORT` (default `low`).
 
-## 10. Go API (Part 2: `POST /query`, `GET /documents`)
+## 10. Go API (Part 2: `POST /query`, `GET /documents`, `DELETE /documents/{id}`)
 
-The public API is a Go server. `POST /query` validates requests and forwards them to the Python service's `POST /internal/query`; `GET /documents` reads document metadata directly from the same PostgreSQL database.
+The public API is a Go server. `POST /query` validates requests and forwards them to the Python service's `POST /internal/query`; `GET /documents` and `DELETE /documents/{id}` work directly on the same PostgreSQL database.
 It needs Go 1.22+; the only third-party dependency is the PostgreSQL driver `github.com/jackc/pgx/v5` (v5.7.4, the newest release that supports Go 1.22).
 
 Start the Python service (port 8000) and the Go API (port 8080) in two terminals:
@@ -127,6 +127,14 @@ Without API calls:
 curl -s http://127.0.0.1:8080/documents        # metadata only (id, title, source, content_hash, created_at), newest first
 curl -s -H 'Content-Type: application/json' -d '{"question":"  "}' http://127.0.0.1:8080/query   # rejected by Go
 ```
+
+Deleting a document (no API calls; **permanent**, its embeddings are removed by `ON DELETE CASCADE`):
+
+```bash
+curl -s -i -X DELETE http://127.0.0.1:8080/documents/<id>   # 204 No Content, then 404 document_not_found if repeated
+```
+
+Invalid ids (`0`, `-1`, `abc`, values above the BIGINT maximum) get `400 invalid_document_id`. To restore a deleted sample document, ingest its file again (step 7).
 
 With API calls (1 embedding + 1 generation request):
 
