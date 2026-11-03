@@ -4,6 +4,27 @@
 > - Setup and run: [docs/run-guide.md](docs/run-guide.md)
 > - Part 1 design: [docs/part1-design.md](docs/part1-design.md)
 > - Part 2 design and verification: [docs/part2-design.md](docs/part2-design.md)
+>
+> **Database schema (Part 3).** A new database is created from [`schema.sql`](schema.sql); a database created from an earlier `schema.sql` is brought up to date with [`migrations/`](migrations/) (commands: [run guide, step 3](docs/run-guide.md#3-apply-the-schema)). Every table, constraint and index is commented in `schema.sql`.
+>
+> - **Two tables, one-to-many.** `documents` has one row per source (title, source, full original text, `content_hash`, `created_at`); `embeddings` has one row per chunk, linked by `document_id`. Document metadata is stored once instead of on every chunk, and listing documents never reads vectors.
+> - **One database for Python and Go.** Python (`rag/ingest.py`) writes a document and all of its chunk rows (text plus vector) in one transaction, with no transaction open during the OpenAI call; Go (`internal/store`) lists and deletes. A separate metadata database would split that write across services and lose the foreign key and cascade. Trade-off: both services are coupled to one schema, so a column change must be made in both ([details](docs/part2-design.md#shared-database)).
+> - **Keys and constraints.** In both tables `id` is `GENERATED ALWAYS AS IDENTITY` (the database assigns it and rejects an explicitly supplied value) and the `PRIMARY KEY` (which guarantees it is unique and not null). `embeddings.document_id` is a foreign key with `ON DELETE CASCADE`: `DELETE /documents/{id}` removes the chunks in the same statement, so no orphaned vector can be retrieved. `UNIQUE (document_id, chunk_index, embedding_model)` stops two chunks at one position. `CHECK`s reject blank titles, texts and chunks, a malformed hash, negative positions and zero token counts.
+> - **`content_hash`.** SHA-256 of the exact stored text, `UNIQUE`. It could be derived from `content`, but a unique index on a 64-character value is far cheaper than comparing whole texts. Ingestion looks it up before calling OpenAI, and `ON CONFLICT (content_hash)` resolves two concurrent ingests of the same text into one row. Only byte-identical text is a duplicate, whatever its title, source or format.
+> - **Chunk text and vector in one row, model name on each row.** Search reads chunk text and vector from `embeddings` and joins `documents` only for the title. `embedding_model` is a plain string per row rather than a lookup table: simple under the current one-model premise, at the cost of repeating the name; switching models means re-embedding every chunk.
+> - **`vector(1536)`.** The output size of `text-embedding-3-small`. The type rejects vectors of any other length, and 1536 is below pgvector's 2000-dimension limit for HNSW on `vector`.
+>
+> | Index | Serves |
+> |-------|--------|
+> | `documents_pkey` (PK, created automatically) | Delete by id, the join from `embeddings`, foreign key checks |
+> | `documents_content_hash_key` (UNIQUE, automatic) | Duplicate lookup and `ON CONFLICT (content_hash)` |
+> | `embeddings_document_chunk_model_key` (UNIQUE, automatic) | Its leading `document_id` serves cascade deletes and per-document chunk lookups, so the foreign key needs no extra index |
+> | `embeddings_pkey` (PK, automatic) | Row identity; not used by current queries |
+> | `documents_created_at_id_idx` (B-tree, `created_at DESC, id DESC`) | The `GET /documents` sort order |
+> | `embeddings_embedding_hnsw_idx` (HNSW, `vector_cosine_ops`) | `ORDER BY embedding <=> query LIMIT k`; the operator class matches cosine distance `<=>` |
+>
+> - **Sort index.** It matches the listing order but does not reduce the rows a full listing reads. In a check on a 20,000-row throwaway database, the full listing used a sequential scan plus sort and a `LIMIT 20` query used the index; the planner's actual choice depends on the data and its cost estimates. Pagination is not implemented yet.
+> - **HNSW.** Approximate search: much faster than an exact scan on large tables, but it can miss a true nearest neighbour. `hnsw.ef_search` (default 40) sets the size of the candidate list kept during the search, trading speed for recall. Search filters on `embedding_model`; with one model nothing is filtered out, but with several models filtered rows are not replaced, so a search could return fewer than `k` results.
 
 # Take-Home Challenge: AI Knowledge Assistant
 
