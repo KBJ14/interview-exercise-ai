@@ -136,7 +136,7 @@ One run against the real Go and Python servers, PostgreSQL and OpenAI, with one 
 
 - Uploads accept `.txt` (UTF-8) only; PDF and other formats need their own parser.
 - `plain` text is chunked by sentences only; paragraph boundaries are not preserved.
-- `GET /documents` returns every document; there is no pagination, and `created_at` has no index (fine for the current corpus size).
+- `GET /documents` returns every document; there is no pagination. The `(created_at DESC, id DESC)` index (`documents_created_at_id_idx`) matches its sort order, but a full listing still reads every row. The plan depends on the planner's cost estimates for the data: a full listing often stays a sequential scan plus sort, and a page read with `LIMIT` is more likely to use the index.
 - `RAG_TIMEOUT` (default 60s) is shared by `/query` and `/ingest`; large documents on a slow connection may need a higher value.
 - Metadata queries share one `DB_QUERY_TIMEOUT` (default 5s).
 - The Go server needs database settings at startup, even if only `/query` is used.

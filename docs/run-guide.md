@@ -36,13 +36,23 @@ docker compose up -d --wait
 
 ## 3. Apply the schema
 
-The schema is not applied automatically; run it once per new database volume.
+The schema is not applied automatically. Which file to run depends on the database.
+
+**New (empty) database**: run `schema.sql` once. It already contains every table and index, so no migration is needed afterwards.
 
 ```bash
 docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < schema.sql
 ```
 
-Expected: `CREATE TABLE` twice, `CREATE INDEX`, `COMMIT`. Running it again on the same database fails because the tables already exist.
+Expected: `CREATE TABLE` twice, `CREATE INDEX` twice, `COMMIT`. Running it again on the same database fails because the tables already exist.
+
+**Existing database created from an earlier `schema.sql`**: do not re-run `schema.sql`; apply the files in `migrations/` in order. Each one adds only what is missing and stops with an error if it finds a conflicting definition.
+
+```bash
+docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < migrations/001_documents_created_at_id_idx.sql
+```
+
+Expected: `NOTICE: created documents_created_at_id_idx`, or `... already exists with the expected definition; nothing to do` when it is already there (safe to re-run).
 
 ## 4. Create the Python environment
 
