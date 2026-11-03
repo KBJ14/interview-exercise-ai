@@ -3,6 +3,7 @@
 >
 > - Setup and run: [docs/run-guide.md](docs/run-guide.md)
 > - Part 1 design: [docs/part1-design.md](docs/part1-design.md)
+> - Part 2 design and verification: [docs/part2-design.md](docs/part2-design.md)
 
 # Take-Home Challenge: AI Knowledge Assistant
 
