@@ -192,6 +192,54 @@ curl -s -H 'Content-Type: application/json' -d '{"question":"Can I get a refund 
 
 Tests: `go test ./...` and `go vet ./...`. The Python service is replaced by `httptest` fakes (no API calls). The `internal/store` tests use the real database inside rolled-back transactions and are skipped if it is not running.
 
+## 11. MCP server (Part 4)
+
+`rag/mcp_server.py` exposes one MCP tool, `query_knowledge_base`, over stdio. It calls the same Python pipeline as step 9, so it needs what step 9 needs: PostgreSQL running (step 2), the schema (step 3), ingested documents (step 7), the database settings in `./.env` (step 1, read by `rag/db.py`), and `OPENAI_API_KEY` in the server process's environment. Design: [part4-design.md](part4-design.md).
+
+Run it from the repository root with the project's virtualenv:
+
+```bash
+.venv/bin/python -m rag.mcp_server
+```
+
+It prints nothing and waits for JSON-RPC on stdin; normally an MCP client starts it. stdout is reserved for the protocol, logs go to stderr.
+
+### Connect it to Claude Code
+
+Register it at **local scope**: the entry is stored in your own Claude Code configuration for this project, not in the repository. Run the command from the repository root and replace the two placeholders:
+
+- `<REPO_ROOT>`: absolute path of this repository
+- `<KEY_FILE>`: a file outside the repository that exports the key, e.g. created once with
+
+  ```bash
+  mkdir -p ~/.config/openai && chmod 700 ~/.config/openai
+  read -rs -p "OpenAI API key: " k; echo
+  (umask 077; printf "export OPENAI_API_KEY='%s'\n" "$k" > ~/.config/openai/env); unset k
+  ```
+
+```bash
+cd <REPO_ROOT>
+claude mcp add --scope local --transport stdio quillbox-knowledge-base -- \
+  bash -c '. "<KEY_FILE>" && cd "<REPO_ROOT>" && exec .venv/bin/python -m rag.mcp_server'
+```
+
+- The server reads the key from `<KEY_FILE>` when it starts, so the Claude Code configuration holds only the file path, never the key. The database password stays in `./.env`.
+- `cd "<REPO_ROOT>"` makes the working directory explicit, so `.venv/bin/python` and the `rag` package resolve regardless of how the client starts the process.
+- Do not add a project-scope `.mcp.json` with these values: it would be committed and would contain your local paths.
+
+Check and connect:
+
+| Where | Command | What it shows |
+|-------|---------|---------------|
+| Shell | `claude mcp get quillbox-knowledge-base` | Scope and `✔ Connected` from a health check (starts the server briefly; does not list tools) |
+| Claude Code session | `/mcp` | The server with its tool count (1). Choose **Reconnect** for it if it was added during the session or shows as failed; or restart Claude Code from the repository root |
+
+Once connected, the session exposes the tool as `mcp__quillbox-knowledge-base__query_knowledge_base`. Each call makes 1 embedding request and at most 1 generation request.
+
+Remove the registration with `claude mcp remove quillbox-knowledge-base -s local`.
+
+Tests (no database, no OpenAI; `answer()` is mocked): `.venv/bin/python -m unittest tests.test_mcp_server`.
+
 ## Stopping and resetting
 
 ```bash

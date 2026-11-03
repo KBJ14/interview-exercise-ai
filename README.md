@@ -4,6 +4,7 @@
 > - Setup and run: [docs/run-guide.md](docs/run-guide.md)
 > - Part 1 design: [docs/part1-design.md](docs/part1-design.md)
 > - Part 2 design and verification: [docs/part2-design.md](docs/part2-design.md)
+> - Part 4 MCP server design and verification: [docs/part4-design.md](docs/part4-design.md)
 >
 > **Database schema (Part 3).** A new database is created from [`schema.sql`](schema.sql); a database created from an earlier `schema.sql` is brought up to date with [`migrations/`](migrations/) (commands: [run guide, step 3](docs/run-guide.md#3-apply-the-schema)). Every table, constraint and index is commented in `schema.sql`.
 >
