@@ -10,26 +10,29 @@ import (
 	"github.com/KBJ14/interview-exercise-ai/internal/ragclient"
 )
 
-// Querier is the RAG backend the handlers depend on; *ragclient.Client implements it.
-type Querier interface {
+// RAGClient is the Python RAG service the handlers depend on; *ragclient.Client implements it.
+type RAGClient interface {
 	Query(ctx context.Context, question string, k int) (*ragclient.Answer, error)
+	Ingest(ctx context.Context, req ragclient.IngestRequest) (*ragclient.IngestResult, error)
 }
 
 type Server struct {
-	rag  Querier
+	rag  RAGClient
 	docs DocumentStore
 	log  *slog.Logger
 }
 
 // NewServer returns the API's HTTP handler.
-func NewServer(rag Querier, docs DocumentStore, log *slog.Logger) http.Handler {
+func NewServer(rag RAGClient, docs DocumentStore, log *slog.Logger) http.Handler {
 	s := &Server{rag: rag, docs: docs, log: log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /query", s.handleQuery)
+	mux.HandleFunc("POST /ingest", s.handleIngest)
 	mux.HandleFunc("GET /documents", s.handleListDocuments)
 	mux.HandleFunc("DELETE /documents/{id}", s.handleDeleteDocument)
 	// Without these, ServeMux answers 404/405 in plain text; keep the JSON error shape everywhere.
 	mux.HandleFunc("/query", methodNotAllowed(http.MethodPost))
+	mux.HandleFunc("/ingest", methodNotAllowed(http.MethodPost))
 	mux.HandleFunc("/documents", methodNotAllowed(http.MethodGet, http.MethodHead))
 	mux.HandleFunc("/documents/{id}", methodNotAllowed(http.MethodDelete))
 	mux.HandleFunc("/", notFound)
@@ -126,10 +129,18 @@ func (s *Server) writeRAGError(w http.ResponseWriter, r *http.Request, err error
 	}
 }
 
+// Python rejections of the caller's own input. Their messages describe the request (e.g. "plain
+// text needs a title"), so they are forwarded; Go validates first, so these are rare.
+var callerErrors = map[string]int{
+	"invalid_request":    http.StatusBadRequest,
+	"invalid_document":   http.StatusBadRequest,
+	"document_too_large": http.StatusRequestEntityTooLarge,
+	"request_too_large":  http.StatusRequestEntityTooLarge,
+}
+
 func (s *Server) writeUpstreamError(w http.ResponseWriter, up *ragclient.UpstreamError) {
-	if up.Status == http.StatusBadRequest && up.Code == "invalid_request" {
-		// Only input-validation text reaches this branch; it describes the caller's own request.
-		writeError(w, http.StatusBadRequest, "invalid_request", up.Message)
+	if status, ok := callerErrors[up.Code]; ok && status == up.Status {
+		writeError(w, status, up.Code, up.Message)
 		return
 	}
 	if known, ok := upstreamErrors[up.Code]; ok {

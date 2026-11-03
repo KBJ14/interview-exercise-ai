@@ -1,17 +1,18 @@
-"""Internal HTTP service for the Go API: health check and question answering.
+"""Internal HTTP service for the Go API: health check, question answering, ingestion.
 
 Run from the repo root:
     .venv/bin/uvicorn rag.api:app --host 127.0.0.1 --port 8000
 
 Every error response has the shape {"error": {"code": "...", "message": "..."}}.
 Status codes separate who is at fault:
-    400       the caller sent an invalid request
+    400/413   the caller sent an invalid or oversized request
     502/503/504  an upstream dependency (OpenAI, PostgreSQL) failed or answered unusably
     500       a bug or misconfiguration in this service
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -20,12 +21,24 @@ import psycopg
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from rag.chunker import ChunkingError
 from rag.embedder import ConfigurationError, EmbeddingError
 from rag.generator import AnswerResult, GenerationError, answer
+from rag.ingest import FORMATS, IngestResult, ingest_text
+from rag.loader import DocumentFormatError
 from rag.retriever import DEFAULT_K, validate_query
+
+# Largest accepted document, in UTF-8 bytes. All chunks are embedded in one API request, and
+# 256 KiB (~65k tokens, ~220 chunks) stays well inside the embeddings request limits.
+MAX_DOCUMENT_BYTES = 256 * 1024
+# Whole request body: JSON escaping can grow text up to 6x (\u0001), plus the other fields.
+MAX_INGEST_BODY_BYTES = 2 * 1024 * 1024
+MAX_SOURCE_CHARS = 255
+MAX_TITLE_CHARS = 300
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +51,15 @@ class QueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     question: Any = None
     k: Any = DEFAULT_K
+
+
+class IngestRequest(BaseModel):
+    # Untyped for the same reason as QueryRequest: _validate_ingest gives precise messages.
+    model_config = ConfigDict(extra="forbid")
+    text: Any = None
+    source: Any = None  # file name or label; metadata only, never opened as a path
+    title: Any = None
+    format: Any = "plain"
 
 
 class ServiceError(Exception):
@@ -95,6 +117,65 @@ def query(req: QueryRequest) -> dict:
     except Exception as exc:
         raise _classify(exc) from exc
     return _to_json(result)
+
+
+# async so the body can be read with a size cap before anything is parsed; the blocking
+# ingest work (DB, OpenAI) then runs in a worker thread like /internal/query does.
+@app.post("/internal/ingest")
+async def ingest(request: Request) -> JSONResponse:
+    body = await _read_body(request, MAX_INGEST_BODY_BYTES)
+    try:
+        req = IngestRequest.model_validate(json.loads(body))
+    except (ValueError, ValidationError) as exc:  # JSONDecodeError is a ValueError
+        raise ServiceError(400, "invalid_request", _first_error(exc)) from exc
+    text, source, title, fmt = _validate_ingest(req)
+
+    try:
+        result = await run_in_threadpool(ingest_text, text, source=source, title=title, fmt=fmt)
+    except (DocumentFormatError, ChunkingError) as exc:
+        # The text itself cannot be used (wrong layout, empty, a word longer than a chunk).
+        raise ServiceError(400, "invalid_document", str(exc)) from exc
+    except Exception as exc:
+        raise _classify(exc) from exc
+    status = 201 if result.status == "inserted" else 200
+    return JSONResponse(status_code=status, content=_ingest_json(result))
+
+
+async def _read_body(request: Request, limit: int) -> bytes:
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit:
+        raise ServiceError(413, "request_too_large", f"request body must be at most {limit} bytes")
+    chunks, size = [], 0
+    async for chunk in request.stream():  # also covers chunked bodies without Content-Length
+        size += len(chunk)
+        if size > limit:
+            raise ServiceError(413, "request_too_large", f"request body must be at most {limit} bytes")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _first_error(exc: Exception) -> str:
+    if isinstance(exc, ValidationError):
+        first = exc.errors()[0]
+        return f"{first['msg']} ({'.'.join(str(p) for p in first['loc'])})"
+    return "request body must be a JSON object"
+
+
+def _validate_ingest(req: IngestRequest) -> tuple[str, str | None, str | None, str]:
+    if not isinstance(req.text, str) or not req.text.strip():
+        raise ServiceError(400, "invalid_request", "text must be a non-empty string")
+    if len(req.text.encode("utf-8")) > MAX_DOCUMENT_BYTES:
+        raise ServiceError(413, "document_too_large", f"document must be at most {MAX_DOCUMENT_BYTES} bytes of UTF-8 text")
+    for name, value, limit in (("source", req.source, MAX_SOURCE_CHARS), ("title", req.title, MAX_TITLE_CHARS)):
+        if value is not None and (not isinstance(value, str) or not value.strip() or len(value) > limit):
+            raise ServiceError(400, "invalid_request", f"{name} must be a non-empty string of at most {limit} characters")
+    if req.format not in FORMATS:
+        raise ServiceError(400, "invalid_request", f"format must be one of {', '.join(FORMATS)}")
+    return req.text, req.source, req.title, req.format
+
+
+def _ingest_json(result: IngestResult) -> dict:
+    return {"status": result.status, "document_id": result.document_id, "chunk_count": result.chunk_count}
 
 
 def _classify(exc: Exception) -> Exception:

@@ -63,7 +63,8 @@ def chunk_document(
 
     chunks: list[Chunk] = []
     for section in doc.sections:
-        header = f"{doc.title} > {section.heading}"
+        # Plain-text documents have one section without a heading; the title alone names it.
+        header = f"{doc.title} > {section.heading}" if section.heading else doc.title
         for body in _split_section(header, section.body, max_tokens, overlap_tokens, count):
             content = _render(header, [body])
             chunks.append(Chunk(doc.source, len(chunks), section.heading, content, count(content)))

@@ -1,13 +1,16 @@
-"""Ingest one document file: hash, de-duplicate, chunk, embed, store.
+"""Ingest one document: parse, hash, de-duplicate, chunk, embed, store.
 
 Order matters for cost and consistency:
-1. the duplicate check runs before any API call, so re-ingesting a file is free;
+1. the duplicate check runs before any API call, so re-ingesting the same text is free;
 2. embeddings are created with no DB transaction open, so a slow API never holds locks;
 3. the document row and all its chunks are written in one transaction (all or nothing).
+
+ingest_text is the shared entry point (HTTP service); ingest_file is the CLI wrapper.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,15 +20,17 @@ import psycopg
 from rag import db
 from rag.chunker import Chunk, chunk_document
 from rag.embedder import EMBEDDING_MODEL, embed_texts
-from rag.loader import parse_document
+from rag.loader import Document, DocumentFormatError, parse_document, parse_plain_text
+
+FORMATS = ("plain", "sectioned")
 
 
 @dataclass(frozen=True)
 class IngestResult:
     status: str  # "inserted" or "skipped"
-    document_id: int
-    source: str
-    chunk_count: int
+    document_id: int  # the new row, or for "skipped" the row that already holds this content
+    source: str | None
+    chunk_count: int  # chunks stored for document_id (for "skipped": the existing row's count)
     api_calls: int
     embedding_tokens: int = 0
 
@@ -40,9 +45,29 @@ def to_vector_literal(vector: list[float]) -> str:
     return "[" + ",".join(repr(x) for x in vector) + "]"
 
 
+def build_document(text: str, *, source: str | None, title: str | None, fmt: str) -> Document:
+    """Turn submitted text into a Document, or raise DocumentFormatError (a ValueError)."""
+    if "\x00" in text:
+        # PostgreSQL TEXT cannot store NUL; reject it as input instead of failing at INSERT.
+        raise DocumentFormatError("document contains a NUL character")
+    if fmt == "sectioned":
+        if title is not None:
+            raise DocumentFormatError("title is read from the document when format is 'sectioned'; omit the title field")
+        # parse_document labels its errors with the source; the stored source stays as given.
+        return dataclasses.replace(parse_document(source or "text", text), source=source)
+    if fmt == "plain":
+        return parse_plain_text(source, title, text)
+    raise DocumentFormatError(f"format must be one of {', '.join(FORMATS)}, got {fmt!r}")
+
+
 def ingest_file(path: str | Path) -> IngestResult:
+    """CLI entry point: files in data/documents/ use the sectioned layout."""
     path = Path(path).expanduser().resolve()
-    doc = parse_document(path.name, path.read_text(encoding="utf-8"))
+    return ingest_text(path.read_text(encoding="utf-8"), source=path.name, fmt="sectioned")
+
+
+def ingest_text(text: str, *, source: str | None, title: str | None = None, fmt: str = "sectioned") -> IngestResult:
+    doc = build_document(text, source=source, title=title, fmt=fmt)
     digest = content_hash(doc.raw_text)
 
     # autocommit: this lookup must not leave a transaction open while we call the API.
@@ -66,6 +91,8 @@ def ingest_file(path: str | Path) -> IngestResult:
         ).fetchone()
         if row is None:
             # Another run stored the same content while we were embedding; keep theirs, discard ours.
+            # ON CONFLICT names content_hash, so only that UNIQUE constraint lands here; any other
+            # violation (e.g. on embeddings) still raises and rolls the transaction back.
             document_id, chunk_count = _find_document(conn, digest)
             return IngestResult("skipped", document_id, doc.source, chunk_count, api_calls=1,
                                 embedding_tokens=embedded.total_tokens)

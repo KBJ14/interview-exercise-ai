@@ -68,37 +68,49 @@ func New(baseURL string, timeout time.Duration) *Client {
 }
 
 func (c *Client) Query(ctx context.Context, question string, k int) (*Answer, error) {
+	status, raw, err := c.post(ctx, "/internal/query", map[string]any{"question": question, "k": k})
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, parseError(status, raw)
+	}
+	return parseAnswer(raw)
+}
+
+// post sends payload as JSON and returns the status and the (size-capped) body.
+// Transport failures are already mapped to ErrTimeout, ErrCanceled or ErrUnavailable.
+func (c *Client) post(ctx context.Context, path string, payload any) (int, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	body, err := json.Marshal(map[string]any{"question": question, "k": k})
-	if err != nil {
-		return nil, fmt.Errorf("encode request: %w", err)
+	var body bytes.Buffer
+	enc := json.NewEncoder(&body)
+	enc.SetEscapeHTML(false) // document text is data; <-style escaping only inflates it
+	if err := enc.Encode(payload); err != nil {
+		return 0, nil, fmt.Errorf("encode request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/internal/query", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, &body)
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
+		return 0, nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, transportError(ctx, err)
+		return 0, nil, transportError(ctx, err)
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		// The deadline can also expire while the body is still streaming.
-		return nil, transportError(ctx, err)
+		return 0, nil, transportError(ctx, err)
 	}
 	if len(raw) > maxResponseBytes {
-		return nil, fmt.Errorf("%w: body larger than %d bytes", ErrInvalidResponse, maxResponseBytes)
+		return 0, nil, fmt.Errorf("%w: body larger than %d bytes", ErrInvalidResponse, maxResponseBytes)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, parseError(resp.StatusCode, raw)
-	}
-	return parseAnswer(raw)
+	return resp.StatusCode, raw, nil
 }
 
 // transportError tells our timeout apart from the caller going away and from a dead service.

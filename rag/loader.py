@@ -1,10 +1,13 @@
 """Load the practice corpus from plain-text files.
 
-Limitation: this parser only understands the layout of the fictional Quillbox documents
-in data/documents/. Blocks are separated by blank lines:
-an optional "[FICTIONAL ...]" notice, a one-line title, then sections whose first line
-is the heading and whose remaining lines are the body.
-Any other layout raises DocumentFormatError instead of being guessed at.
+Two explicit formats; the caller says which one applies, nothing is guessed:
+
+- "sectioned" (parse_document): the layout of the fictional Quillbox documents in
+  data/documents/. Blocks are separated by blank lines: an optional "[FICTIONAL ...]" notice,
+  a one-line title, then sections whose first line is the heading and whose remaining lines
+  are the body. Any other layout raises DocumentFormatError.
+- "plain" (parse_plain_text): any text. The whole body becomes one untitled section, so the
+  chunker splits it by sentences; paragraph boundaries are not preserved.
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ class Section:
 
 @dataclass(frozen=True)
 class Document:
-    source: str  # file name, e.g. "billing.txt"
+    source: str | None  # file name, e.g. "billing.txt"; None for text submitted without one
     title: str
     raw_text: str  # untouched file content (notice included), kept for re-chunking later
     sections: tuple[Section, ...]
@@ -77,3 +80,19 @@ def parse_document(source: str, text: str) -> Document:
         sections.append(Section(heading.strip(), body))
 
     return Document(source=source, title=title, raw_text=text, sections=tuple(sections))
+
+
+def parse_plain_text(source: str | None, title: str | None, text: str) -> Document:
+    """Unstructured text as one section with an empty heading.
+
+    The title comes from `title`, else from the source file name without its extension
+    (e.g. "returns-policy.txt" -> "returns-policy"). `source` is metadata only; no file is read.
+    """
+    label = source or "text"
+    name = " ".join((title or (Path(source).stem if source else "")).split())
+    if not name:
+        raise DocumentFormatError(f"{label}: plain text needs a title or a source file name to derive it from")
+    body = " ".join(text.split())
+    if not body:
+        raise DocumentFormatError(f"{label}: document is empty")
+    return Document(source=source, title=name, raw_text=text, sections=(Section("", body),))

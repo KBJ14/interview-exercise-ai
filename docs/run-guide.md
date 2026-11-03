@@ -97,9 +97,9 @@ The code validates the output format and citation labels, not factual accuracy.
 
 Optional settings: `RAG_GENERATION_MODEL` (default `gpt-6-luna`), `RAG_REASONING_EFFORT` (default `low`).
 
-## 10. Go API (Part 2: `POST /query`, `GET /documents`, `DELETE /documents/{id}`)
+## 10. Go API (Part 2: `POST /ingest`, `POST /query`, `GET /documents`, `DELETE /documents/{id}`)
 
-The public API is a Go server. `POST /query` validates requests and forwards them to the Python service's `POST /internal/query`; `GET /documents` and `DELETE /documents/{id}` work directly on the same PostgreSQL database.
+The public API is a Go server. `POST /ingest` and `POST /query` validate requests and forward them to the Python service (`POST /internal/ingest`, `POST /internal/query`); `GET /documents` and `DELETE /documents/{id}` work directly on the same PostgreSQL database. Parsing, chunking, embedding and storing a new document happen only in Python, in one transaction.
 It needs Go 1.22+; the only third-party dependency is the PostgreSQL driver `github.com/jackc/pgx/v5` (v5.7.4, the newest release that supports Go 1.22).
 
 Start the Python service (port 8000) and the Go API (port 8080) in two terminals:
@@ -127,6 +127,44 @@ Without API calls:
 curl -s http://127.0.0.1:8080/documents        # metadata only (id, title, source, content_hash, created_at), newest first
 curl -s -H 'Content-Type: application/json' -d '{"question":"  "}' http://127.0.0.1:8080/query   # rejected by Go
 ```
+
+### `POST /ingest`
+
+Two request types, converted to the same internal request:
+
+| Body | Fields |
+|------|--------|
+| `application/json` | `text` (required), `title`, `source` (a label such as a file name), `format` |
+| `multipart/form-data` | `file` (required, one `.txt` file, UTF-8), `title`, `format`; the source is the file's base name |
+
+`format` is `plain` (default) or `sectioned`:
+
+- `plain`: any text. The whole text is one section, chunked by sentences (300 tokens, 50 overlap). The title is `title`, or the source name without its extension; one of them is required.
+- `sectioned`: the layout of `data/documents/*.txt` (title line, then heading + paragraph blocks). The title is read from the text, so `title` must be omitted.
+
+The uploaded file name is metadata only: path parts are dropped (`../../etc/a.txt` -> `a.txt`) and nothing is read from or written to the server's disk.
+
+Responses:
+
+| Status | Body | Meaning |
+|--------|------|---------|
+| `201` | `{"status":"inserted","document_id":96,"chunk_count":1}` | New document stored with its chunks |
+| `200` | `{"status":"skipped","document_id":3,"chunk_count":5}` | The same text (SHA-256 of the raw text, whatever its title, source or format) is already stored. `document_id` and `chunk_count` describe **that existing document**; nothing was embedded or written and the submitted metadata was ignored |
+| `400` | `invalid_request` / `invalid_document` | Bad fields, invalid UTF-8, NUL characters, empty text; or text that does not fit the chosen format |
+| `413` | `document_too_large` / `request_too_large` | Text over 256 KiB (UTF-8 bytes); JSON body over 2 MiB; multipart body over 320 KiB |
+| `415` | `unsupported_media_type` / `unsupported_file_type` | Other `Content-Type`; a file that is not `.txt` |
+| `502`/`503`/`504` | as for `/query` | Python, OpenAI or the database failed |
+
+The Python service enforces the same 256 KiB text limit and a 2 MiB body limit on `/internal/ingest`.
+
+```bash
+# API calls: 1 embedding request per new document; none for a duplicate
+curl -s -H 'Content-Type: application/json' -d '{"text":"Orders ship in 2 days.","title":"Shipping"}' http://127.0.0.1:8080/ingest
+curl -s -F file=@notes.txt -F title=Notes http://127.0.0.1:8080/ingest
+curl -s -F file=@data/documents/billing.txt -F format=sectioned http://127.0.0.1:8080/ingest   # already stored: 200 skipped, no API call
+```
+
+### `DELETE /documents/{id}`
 
 Deleting a document (no API calls; **permanent**, its embeddings are removed by `ON DELETE CASCADE`):
 
