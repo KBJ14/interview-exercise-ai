@@ -1,0 +1,25 @@
+# Keep secrets and local state out of the build context entirely, so no COPY can pick them up.
+
+# Secrets and local settings
+.env
+.env.*
+!.env.example
+**/*.pem
+**/*.key
+
+# Local environments, VCS and tool state
+.venv/
+.git/
+.claude/
+.idea/
+.vscode/
+
+# Caches, build output, logs, temporary files
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.coverage
+*.log
+*.tmp
+*.swp

@@ -28,17 +28,45 @@ sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
 
 ## 2. Start PostgreSQL with pgvector
 
-Docker Compose currently automates the database only: the `db` service and a one-shot `migrate` service. The Python RAG service, the Go API and sample-document seeding are not in Compose yet; run them as in steps 4–10.
+Docker Compose currently runs three services: `db`, a one-shot `migrate`, and the internal Python RAG service `rag`. The Go API and sample-document seeding are not in Compose yet; run the Go API as in step 10 and ingest as in step 7.
+
+Build the `rag` image the first time (downloads the Python base image and packages):
+
+```bash
+docker compose build rag
+```
+
+Start and check:
 
 ```bash
 docker compose up -d
 docker compose wait migrate   # exit code 0 = schema ready; anything else = see step 3
+docker compose ps -a          # db: healthy, migrate: Exited (0), rag: healthy (may show "starting" for a few seconds)
 ```
 
-- `db` reports healthy once PostgreSQL accepts TCP connections; `migrate` starts after that, applies the migrations and exits.
-- Do not use `docker compose up -d --wait` here: it treats the finished one-shot `migrate` container as a failure and exits with 1 even when the migration succeeded. `docker compose wait migrate` returns `migrate`'s own exit code instead.
-- `docker compose ps -a` should show `db` as `healthy` and `migrate` as `Exited (0)`.
+- Order: `db` becomes healthy once PostgreSQL accepts TCP connections; `migrate` then applies the migrations and exits; `rag` starts only after `migrate` exited with 0.
+- Do not use `docker compose up -d --wait`: it treats the finished one-shot `migrate` container as a failure and exits with 1 even when everything succeeded. `docker compose wait migrate` returns `migrate`'s own exit code instead.
 - Inside Compose the database is `db:5432`; `POSTGRES_PORT` in `.env` is only the port published on the host for local tools (tests, MCP server, `go run`).
+
+After changing Python code, `requirements.txt` or the sample documents, rebuild and restart only `rag`:
+
+```bash
+docker compose build rag && docker compose up -d rag
+```
+
+### The `rag` container
+
+- **Internal only.** It listens on port 8000 inside the Compose network and is not published on the host; other containers reach it at `http://rag:8000`. Its healthcheck calls `GET /health`, which touches neither the database nor OpenAI.
+- **Local runs keep working.** The `.venv` tests, `uvicorn` on the host (step 10), the ingest CLI and the MCP server (step 11) use the host-published `db` port as before. If you also run `uvicorn` on the host, it is a separate process on host port 8000 and does not conflict with the container.
+- **Configuration** comes from the environment at start-up: `POSTGRES_*` from `.env` (with `POSTGRES_HOST=db`, `POSTGRES_PORT=5432` set by Compose), and `OPENAI_API_KEY` from the shell environment or, if unset there, from `.env` (see `.env.example`). Without a key the service still starts and is healthy; queries fail with `configuration_error` before any OpenAI request. The key is not passed to any other service.
+- **Image contents.** `.dockerignore` keeps `.env`, `.venv`, `.git` and caches out of the build context; the image holds only `rag/`, `scripts/ingest.py`, `data/documents/` and the installed packages, runs as an unprivileged user, and has the tokenizer encoding cached at build time. No key or password is a build argument or part of a layer.
+- Do not run `docker compose config` without `--quiet` while the key is exported: it prints the resolved environment, key included.
+
+Call it from inside the Compose network (the slim image has no curl):
+
+```bash
+docker compose exec -T rag python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/health').read().decode())"
+```
 
 ## 3. Apply the schema
 

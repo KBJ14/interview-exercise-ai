@@ -43,5 +43,37 @@ services:
     entrypoint: ["sh", "/usr/local/bin/migrate.sh"]
     restart: "no"
 
+  # Internal Python RAG service (FastAPI). Not published on the host: only other containers reach
+  # it, at http://rag:8000. Local runs (.venv, MCP server) keep using the host-published db port.
+  rag:
+    build:
+      context: .
+      dockerfile: docker/rag.Dockerfile
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      # Container-side database address; POSTGRES_PORT in .env is the host-published port.
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # From the shell environment first, then .env. Empty is allowed: the service starts and
+      # queries fail with configuration_error until a key is provided.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Optional overrides; empty means the defaults in rag/generator.py.
+      RAG_GENERATION_MODEL: ${RAG_GENERATION_MODEL:-}
+      RAG_REASONING_EFFORT: ${RAG_REASONING_EFFORT:-}
+    expose:
+      - "8000"
+    healthcheck:
+      # GET /health touches neither the database nor OpenAI. The slim image has no curl.
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status == 200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
 volumes:
   pgdata:
