@@ -1,6 +1,6 @@
 # Part 5 Testing Strategy
 
-What the automated tests check, why, and where their limits are, as of the commit that adds `tests/test_query_flow.py`.
+What the automated tests check, why, and where their limits are. Counts and results are as of the final Docker Compose work (Go `GET /health` added).
 How to run them and what they need: [run-guide.md, step 5](run-guide.md#5-run-the-tests-no-api-calls). Design notes: [Part 1](part1-design.md), [Part 2](part2-design.md), [Part 4](part4-design.md).
 
 This document describes the tests as they are. It does not claim that every feature was written test-first.
@@ -36,10 +36,10 @@ Counts are test methods (Python) and top-level `Test…` functions (Go, subtests
 
 | Kind | Python | Go | Needs |
 |------|--------|----|-------|
-| Unit: no database, no network | 66 | 40 (`internal/config`, `internal/httpapi`) | nothing beyond the installed packages |
+| Unit: no database, no network | 66 | 43 (`internal/config` 7, `internal/httpapi` 36) | nothing beyond the installed packages |
 | Real database integration | 13: `test_ingest` (2), `test_retriever.SearchQueryTest` (3), `test_ingest_text.IngestTextDatabaseTest` (6), `test_query_flow` (2) | 7 (`internal/store`) | PostgreSQL with the schema and `./.env` settings |
 | HTTP and MCP connections | MCP over a real stdio subprocess (2). FastAPI runs in-process through `TestClient`, counted as unit | The `internal/httpapi` tests make real HTTP requests to an `httptest` fake of the Python service (counted as unit above) | nothing extra |
-| **Total** | **81** | **47** | |
+| **Total** | **81** | **50** | |
 
 ### Where the boundaries are
 
@@ -114,13 +114,17 @@ So `OK` alone does not mean the database paths were tested. Check the skipped co
 
 ## Latest results
 
-| Suite | When | Result |
-|-------|------|--------|
-| Python, `tests/test_query_flow.py` | Latest run, real PostgreSQL, no API key | 2 run, 2 passed, 0 skipped |
-| Python, full suite | Same run | 81 run, 81 passed, 0 skipped; no request to `api.openai.com` in the log (only in-process `TestClient` requests) |
-| Go, `go test ./...` and `go vet ./...` | Last run during the Part 3 sort-index work, after the last Go code change (`d8e5aa8`); not re-run for this document | Passed with the database available, no skips; 47 top-level tests in the files at this commit |
+All rows below are runs of the final code, against the real PostgreSQL of the Compose stack, with `OPENAI_API_KEY` removed from the environment.
 
-Data after the latest Python run: the three existing documents (ids 3, 15, 16) and their 15 chunks had the same content hashes, chunk text and vector fingerprints as before; no `test_query_flow_*` schema and no test rows were left.
+| Suite | Result |
+|-------|--------|
+| Python, full suite (`unittest discover -s tests`) | 81 run, 81 passed, **0 skipped**; no request to `api.openai.com` in the log (only in-process `TestClient` requests) |
+| Go, `go vet ./...` | passed |
+| Go, `go test ./...` | 50 top-level tests passed, 0 failed, **0 skipped** (including the 7 database-backed `internal/store` tests) |
+
+Data after these runs: the three existing documents (ids 3, 15, 16) and their 15 chunks had the same content hashes, chunk text and vector fingerprints as before; no `test_query_flow_*` schema and no test rows were left.
+
+Earlier runs are recorded in the Part 2 and Part 4 documents; the Docker stack itself (schema setup, migrate, seed, health, one real query) was checked by hand and is recorded in [docker.md](docker.md#verification), not counted here.
 
 ## Limitations
 
@@ -129,6 +133,6 @@ Data after the latest Python run: the three existing documents (ids 3, 15, 16) a
 - Go ↔ Python compatibility is tested with hand-written copies of Python's responses in the Go tests; a field change in `rag/api.py` would not fail the Go tests (a shared contract fixture would).
 - Skipped database tests do not fail a run; there is no switch to make them required.
 - Tests use the development database (in temporary schemas, rolled-back transactions or marked rows), not a dedicated test database; an interrupted run could leave marked rows behind.
-- Applying `schema.sql` to a fresh database is exercised by `test_query_flow`, but migrations are not tested automatically.
+- Applying `schema.sql` to a fresh database is exercised by `test_query_flow`; migrations, the Compose `migrate` and `seed` services and container health were verified by hand (see [docker.md](docker.md#verification)), not by automated tests.
 - `cmd/api` startup and shutdown, and MCP request cancellation, have no tests.
 - There is no CI configuration; tests are run by hand.

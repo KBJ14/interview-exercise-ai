@@ -77,4 +77,4 @@ The 7-question baseline cost about $0.0008 for generation at published standard 
 - The loader parses only the fictional Quillbox format in `data/documents/`: optional `[FICTIONAL ...]` notice, one-line title, then blank-line-separated sections whose first line is the heading. Other layouts raise `DocumentFormatError`.
 - Only `.txt` files directly inside the given directory are read. PDF is not supported. Files in `docs/` are never ingested.
 - Sentence splitting is a simple punctuation rule; abbreviations such as "e.g." would split incorrectly.
-- The pipeline runs as CLI scripts. There is no HTTP service yet, the schema is applied manually, and the Python code is not in `docker-compose.yml`.
+- Part 1 itself is CLI scripts. The HTTP service (Part 2), automatic schema setup and the Compose stack with sample seeding came later; see [docker.md](docker.md).

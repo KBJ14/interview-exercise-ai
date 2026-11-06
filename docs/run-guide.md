@@ -1,15 +1,16 @@
-# Run Guide (Part 1 RAG pipeline)
+# Run Guide
 
-How to run the Python RAG pipeline from a fresh clone: database, ingestion, retrieval, and answer generation.
-Commands run from the repository root unless noted.
+How to run the system from a fresh clone. Steps 1–2 are all the Docker stack needs; steps 4–11 run the pieces on the host for development and testing.
+Commands run from the repository root unless noted. Docker design and verification: [docker.md](docker.md).
 
 ## Prerequisites
 
 | Requirement | Checked with | Notes |
 |-------------|--------------|-------|
-| Docker with Compose v2 | `docker compose version` | On WSL, enable Docker Desktop's WSL integration for your distro |
-| Python 3.12 with `venv` | `python3 --version` | Tested on 3.12.3 |
-| OpenAI API key | `[ -n "$OPENAI_API_KEY" ] && echo set` | Only needed for steps 7–9; never paste it on the command line or into files in the repo |
+| Docker with Compose v2 | `docker compose version` | On WSL, enable Docker Desktop's WSL integration for your distro. Tested with Compose v5.6.1 |
+| Python 3.12 with `venv` | `python3 --version` | Host runs only (steps 4–11); tested on 3.12.3 |
+| Go 1.22+ | `go version` | Host runs only (steps 5, 10) |
+| OpenAI API key | `[ -n "$OPENAI_API_KEY" ] && echo set` | Needed to seed a new volume and to answer questions; never paste it on the command line or into files in the repo |
 
 To load the key without echoing it or writing it to shell history:
 
@@ -24,39 +25,56 @@ cp .env.example .env
 sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
 ```
 
-`.env` is git-ignored. Change `POSTGRES_PORT` if 5432 is already in use on your machine.
+`.env` is git-ignored. Change `POSTGRES_PORT` or `API_PORT` if 5432 or 8080 is already in use on your machine.
 
-## 2. Start PostgreSQL with pgvector
+The OpenAI key: either export it in the shell that runs `docker compose` (e.g. `. ~/.config/openai/env`, or the `read` command above), or put it into `OPENAI_API_KEY=` in `.env` (then `chmod 600 .env`). The shell value wins when both are set.
 
-Docker Compose currently runs four services: `db`, a one-shot `migrate`, the internal Python RAG service `rag`, and the Go API `api`. **Sample-document seeding is not in Compose yet**: a new volume starts empty, so ingest the samples as in step 7 (or through `POST /ingest`).
+## 2. Start the stack with Docker Compose
 
-Build the images the first time (downloads the Python, Go and Alpine base images, packages and Go modules):
+Five services: `db` (PostgreSQL + pgvector), a one-shot `migrate`, the internal Python RAG service `rag`, a one-shot `seed` that ingests the sample documents, and the Go API `api`.
 
-```bash
-docker compose build
-```
-
-Start and check:
+Start (the first run builds the images; this downloads the Python, Go and Alpine base images, packages and Go modules):
 
 ```bash
 docker compose up -d
-docker compose wait migrate   # exit code 0 = schema ready; anything else = see step 3
-docker compose ps -a          # db, rag, api: healthy; migrate: Exited (0) (rag/api may show "starting" for a few seconds)
-curl -s http://127.0.0.1:8080/health      # {"status":"ok"}
-curl -s http://127.0.0.1:8080/documents   # {"documents":[...]}; [] on a new, unseeded volume
 ```
 
-- Order: `db` becomes healthy once PostgreSQL accepts TCP connections; `migrate` then applies the migrations and exits; `rag` starts after `migrate` exited with 0; `api` starts once `db` is healthy, `migrate` succeeded and `rag` is healthy.
-- Do not use `docker compose up -d --wait`: it treats the finished one-shot `migrate` container as a failure and exits with 1 even when everything succeeded. `docker compose wait migrate` returns `migrate`'s own exit code instead.
+Check that start-up finished:
+
+```bash
+docker compose wait migrate seed   # 0 = schema ready and samples ingested (or already there); non-zero = see below
+docker compose ps -a               # db, rag, api: healthy; migrate, seed: Exited (0)
+curl -s http://127.0.0.1:8080/health      # {"status":"ok"}
+curl -s http://127.0.0.1:8080/documents   # the 3 sample documents
+curl -s -H 'Content-Type: application/json' -d '{"question":"Can I get a refund for a monthly renewal charge?"}' \
+     http://127.0.0.1:8080/query           # 1 embedding + 1 generation request
+```
+
+- Order: `db` becomes healthy once PostgreSQL accepts TCP connections; `migrate` then applies the migrations and exits; `rag` and `seed` start after `migrate` exited with 0; `api` starts once `db` is healthy, `migrate` succeeded and `rag` is healthy. Nothing waits for `seed`.
+- Do not use `docker compose up -d --wait`: it exits with 1 whenever a one-shot container (`migrate`, `seed`) has exited, even with status 0. `docker compose wait migrate seed` returns their own exit status instead.
 - Inside Compose the database is `db:5432` and the Python service `http://rag:8000`. `POSTGRES_PORT` and `API_PORT` in `.env` are only the ports published on the host.
-- **Healthy is not the same as working end to end.** The healthchecks (`GET /health` on `rag` and `api`) only confirm that each process answers HTTP; they call neither the database, the other service nor OpenAI. A healthy stack can still fail queries because the key is missing or invalid, or return no sources because no documents are ingested yet. `GET /documents` shows whether documents exist; a keyless `POST /query` returns 502 `rag_service_error` (the Python side reports `configuration_error`).
+- **Seeding and cost.** On a new volume `seed` makes one embedding request per sample file (3). On every later start it finds the documents by content hash and reports `skipped ... api_calls=0` without calling OpenAI. `docker compose logs seed` shows the result per file. A sample file you edit is ingested as a new document; the old version stays.
+- **Healthy is not the same as working end to end.** The healthchecks (`GET /health` on `rag` and `api`) only confirm that each process answers HTTP; they call neither the database, the other service nor OpenAI. Without a key the stack is still healthy, but `seed` exits 1 on a new volume (`OPENAI_API_KEY is not set` per file), `GET /documents` is empty, and `POST /query` returns 502 `rag_service_error` (the Python side reports `configuration_error`). Set the key and run `docker compose up -d` again: `rag` and `seed` are recreated with it and `seed` ingests the samples.
+
+If `docker compose wait migrate seed` is non-zero:
+
+| Check | Command |
+|-------|---------|
+| Which one failed | `docker compose ps -a` (`Exited (1)` or another non-zero status) |
+| Why `seed` failed | `docker compose logs seed` (missing key, OpenAI error, database error per file) |
+| Why `migrate` failed | `docker compose logs migrate`, and step 3 |
+| Retry after fixing | `docker compose up -d` (exited one-shots are started again) |
+
+Re-running and restarting: `docker compose up -d` again starts the exited `migrate` and `seed` once more (no-op and all skipped); `docker compose down` followed by `up -d` keeps the volume, so the schema is not re-applied and nothing is re-embedded. Details: [docker.md](docker.md#re-running-and-restarting).
 
 After changing source code, dependencies or the sample documents, rebuild and restart only the affected service:
 
 ```bash
-docker compose build rag && docker compose up -d rag   # rag/, scripts/ingest.py, requirements.txt, data/documents/
-docker compose build api && docker compose up -d api   # cmd/, internal/, go.mod, go.sum
+docker compose build rag seed && docker compose up -d rag seed   # rag/, scripts/ingest.py, requirements.txt, data/documents/
+docker compose build api && docker compose up -d api             # cmd/, internal/, go.mod, go.sum
 ```
+
+`rag` and `seed` are built from the same Dockerfile; build both so they stay on the same code.
 
 **Port conflicts.** The host ports are `POSTGRES_PORT` (default 5432) for `db` and `API_PORT` (default 8080, bound to 127.0.0.1) for `api`; `rag` publishes nothing. If `docker compose up` reports `port is already allocated`, for example because `go run ./cmd/api` is also listening on 8080, set another value in `.env` (e.g. `API_PORT=18080`) and run `docker compose up -d` again.
 
@@ -167,6 +185,8 @@ Add `--show "Refund Policy"` to print a chunk's full text.
 ```bash
 .venv/bin/python scripts/ingest.py data/documents/*.txt
 ```
+
+With Docker, the `seed` service already ran this command inside the stack (step 2); run it on the host only when working without Compose's `seed`.
 
 Expected: `inserted ... chunks=5 api_calls=1` per file. Only `data/documents/*.txt` is corpus input; files in `docs/` are evaluation material and must not be ingested.
 
@@ -329,16 +349,22 @@ Tests (no database, no OpenAI; `answer()` is mocked): `.venv/bin/python -m unitt
 ## Stopping and resetting
 
 ```bash
-docker compose down      # stop; data stays in the pgdata volume
-docker compose down -v   # stop and delete all stored documents and embeddings
+docker compose stop      # stop the containers; start again with `docker compose up -d`
+docker compose down      # remove the containers and network; data stays in the pgdata volume
+docker compose down -v   # also delete the volume: all stored documents and embeddings are lost
 ```
+
+The services have no restart policy: after Docker or the machine restarts, run `docker compose up -d` again.
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---------|--------------|
-| `docker` not found inside WSL | Docker Desktop WSL integration is off for this distro |
-| `port is already allocated` on `up` | Another service uses `POSTGRES_PORT`; pick another port in `.env` |
-| `relation "documents" does not exist` | Step 3 was skipped for this database volume |
-| `OPENAI_API_KEY is not set` | The key is not exported in the current shell |
+| `docker` not found inside WSL | Docker Desktop is not running, or its WSL integration is off for this distro |
+| `port is already allocated` on `up` | Another process uses `POSTGRES_PORT` or `API_PORT` (e.g. a local `go run`); pick another port in `.env` |
+| `docker compose up -d --wait` exits 1 although everything works | It counts exited one-shot containers as failures; use `docker compose wait migrate seed` |
+| `seed` Exited (1) | See `docker compose logs seed`: usually the key is missing on a new volume |
+| `relation "documents" does not exist` | The schema was not applied: check `docker compose logs db migrate` (step 3) |
+| `OPENAI_API_KEY is not set` | Not exported in the shell that ran `docker compose`/the script, and not in `.env` |
+| `POST /query` returns 502 `rag_service_error` | The Python service failed, most often for a missing key (`docker compose logs rag`) |
 | `HTTP 404` / `model_not_found` from `ask.py` | The project has no access to the configured generation model; the code does not switch models automatically |

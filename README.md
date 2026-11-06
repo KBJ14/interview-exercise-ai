@@ -1,11 +1,62 @@
 > **About this repository:** a personal practice project for learning AI development tools (such as Claude Code) while building the system below. It is not a challenge submission.
 > The challenge text below is kept as the project brief.
 >
-> - Setup and run: [docs/run-guide.md](docs/run-guide.md)
-> - Part 1 design: [docs/part1-design.md](docs/part1-design.md)
-> - Part 2 design and verification: [docs/part2-design.md](docs/part2-design.md)
-> - Part 4 MCP server design and verification: [docs/part4-design.md](docs/part4-design.md)
-> - Part 5 testing strategy and results: [docs/part5-testing.md](docs/part5-testing.md)
+> **Quick start** (Docker with Compose v2; details and troubleshooting in the [run guide](docs/run-guide.md#2-start-the-stack-with-docker-compose)):
+>
+> ```bash
+> cp .env.example .env                    # set POSTGRES_PASSWORD; adjust POSTGRES_PORT / API_PORT if 5432 / 8080 are taken
+> read -rs -p "OpenAI API key: " OPENAI_API_KEY; echo; export OPENAI_API_KEY   # or set OPENAI_API_KEY in .env
+> docker compose up -d                    # builds the images on first run, starts everything, seeds the samples
+> docker compose wait migrate seed        # 0 = schema ready and samples ingested
+> curl -s http://127.0.0.1:8080/documents
+> curl -s -H 'Content-Type: application/json' -d '{"question":"Can I get a refund for a monthly renewal charge?"}' http://127.0.0.1:8080/query
+> docker compose down                     # stop; `down -v` would also delete the stored documents
+> ```
+>
+> Cost: on a new volume, seeding makes one embedding request per sample file (3); later starts skip them without calling OpenAI. Each question makes one embedding and one generation request. Without a key every service still reports healthy, but seeding exits 1 and questions return 502; `docker compose wait migrate seed` and `docker compose logs seed` show this.
+>
+> **Architecture**
+>
+> ```
+> client ──HTTP──▶ api (Go, 127.0.0.1:8080) ──HTTP──▶ rag (Python FastAPI, internal :8000) ──▶ OpenAI
+>                     │  GET /documents, DELETE              │  /internal/query, /internal/ingest
+>                     └──────────────▶ db (PostgreSQL + pgvector) ◀──────────────┘
+> one-shot on start-up: migrate (migrations/*.sql) → seed (data/documents/*.txt via the rag image)
+> MCP client (e.g. Claude Code) ──stdio──▶ python -m rag.mcp_server (host) ──▶ same RAG code and db
+> ```
+>
+> | Part | Role | Docs |
+> |------|------|------|
+> | Python RAG (`rag/`) | Parse, chunk, embed and store documents; retrieve with pgvector; generate cited answers; internal FastAPI service | [Part 1](docs/part1-design.md) |
+> | Go API (`cmd/api`, `internal/`) | Public REST API: validation, size limits, error translation; lists and deletes documents directly in PostgreSQL | [Part 2](docs/part2-design.md) |
+> | PostgreSQL + pgvector (`schema.sql`, `migrations/`) | Document metadata, chunks and vectors in one database | Database schema notes below, [`schema.sql`](schema.sql) |
+> | MCP server (`rag/mcp_server.py`) | `query_knowledge_base` tool over stdio for LLM clients | [Part 4](docs/part4-design.md) |
+> | Tests (`tests/`, `internal/**/*_test.go`) | Unit, real-database integration and MCP stdio tests; no test calls OpenAI | [Part 5](docs/part5-testing.md) |
+> | Docker Compose | db, migrate, rag, seed, api; schema setup and sample seeding on start-up | [Docker](docs/docker.md) |
+>
+> API reference: endpoints, request fields, responses and status codes in [Part 2](docs/part2-design.md#endpoints) and the [run guide](docs/run-guide.md#10-go-api-part-2-post-ingest-post-query-get-documents-delete-documentsid).
+>
+> **Design patterns and trade-offs**
+>
+> - **Gateway in front of an internal service.** Go is the only public entry point; it validates input, enforces size limits and translates errors, and calls the Python service over HTTP. Python keeps the RAG logic in one place. Cost: one extra network hop and two error vocabularies to keep aligned.
+> - **Adapters at the edges.** The MCP server (`rag/mcp_server.py`) and the Go `ragclient` only convert between their protocol and the existing calls; neither reimplements retrieval or generation.
+> - **Interfaces for dependencies.** Handlers depend on `RAGClient` and `DocumentStore`, the store on `DBTX` (a pool or a transaction), so tests swap in fakes or rolled-back transactions without touching application code.
+> - **Idempotent start-up steps.** Migrations are safe to re-run and seeding checks content hashes before embedding, so `docker compose up -d` can run any number of times without duplicates or extra cost. Cost: no migration history table, and edited sample files become new documents.
+> - **One database for both services.** A document and its chunks are written in one transaction and deleted by `ON DELETE CASCADE`; the price is that both services depend on one schema (see the schema notes below).
+>
+> **Error handling.** Both services return `{"error": {"code": "...", "message": "..."}}` with status codes by cause: 400/413/415 for the caller's input, 404/405 for unknown documents, paths or methods, 502 when a dependency answered unusably, 503 when it is unavailable, 504 on timeouts, 500 for bugs or missing configuration. Python classifies exceptions (`rag/api.py`); Go maps typed errors from its Python client and store (`internal/ragclient`, `internal/store`) and replaces dependency messages with fixed text. Driver messages, SQL states, addresses and keys stay in the logs. The MCP tool returns input errors as tool errors and everything else as a generic error. Details: [Part 2](docs/part2-design.md#components-and-request-flow), [Part 4](docs/part4-design.md#errors-and-stdio).
+>
+> **Known limitations and next steps**
+>
+> - Only `.txt` uploads (no PDF parser); plain text is chunked by sentences only.
+> - No pagination on `GET /documents`, no authentication or TLS on the API.
+> - Retrieval and answer quality are checked by hand ([baseline](docs/rag-baseline.md)), not by automated tests; HNSW index use is not verified; token usage is not exposed.
+> - Go ↔ Python response shapes are kept in sync by hand; a shared contract fixture would catch drift.
+> - No CI; database tests skip instead of failing when PostgreSQL is not reachable.
+> - No restart policy; the OpenAI key reaches containers as an environment variable.
+> - The optional fine-tuning extension was not attempted.
+>
+> Documentation: [run guide](docs/run-guide.md) · [Part 1](docs/part1-design.md) · [Part 2](docs/part2-design.md) · [Part 4](docs/part4-design.md) · [Part 5](docs/part5-testing.md) · [Docker](docs/docker.md) · [RAG checks](docs/rag-checks.md) · [RAG baseline](docs/rag-baseline.md)
 >
 > **Database schema (Part 3).** A new database is created from [`schema.sql`](schema.sql); a database created from an earlier `schema.sql` is brought up to date with [`migrations/`](migrations/) (commands: [run guide, step 3](docs/run-guide.md#3-apply-the-schema)). Every table, constraint and index is commented in `schema.sql`.
 >

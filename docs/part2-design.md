@@ -116,6 +116,8 @@ No test calls OpenAI: answers and embeddings are mocked or replaced by fixed vec
 
 Run with `.venv/bin/python -m unittest discover -s tests`, `go test ./...` and `go vet ./...`. Database tests are skipped when PostgreSQL is not reachable; in the final runs none were skipped.
 
+These counts are as of the commit named at the top; current counts and the latest runs are in [part5-testing.md](part5-testing.md#latest-results).
+
 ### Live end-to-end run with OpenAI
 
 One run against the real Go and Python servers, PostgreSQL and OpenAI, with one short temporary document and one question:
@@ -143,4 +145,4 @@ One run against the real Go and Python servers, PostgreSQL and OpenAI, with one 
 - Deletion is permanent; a deleted sample document can be restored by ingesting its file again.
 - Token usage is not exposed by the public API or logged.
 - `GET /documents/{id}` (single document) is not implemented; it returns 405.
-- Python and Go are run by hand (see the run guide); `docker-compose.yml` still starts only PostgreSQL, and the schema is applied manually. These belong to the deliverables beyond Part 2.
+- Deployment is the Docker Compose stack described in [docker.md](docker.md) (PostgreSQL, schema setup, Python, sample seeding, Go); it was added after the Part 2 work recorded here.
