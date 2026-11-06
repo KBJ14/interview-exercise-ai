@@ -63,11 +63,30 @@ python3 -m venv .venv
 
 ## 5. Run the tests (no API calls)
 
+No test needs an OpenAI key: embeddings and generation are replaced by fakes. To make sure nothing can reach OpenAI, run without the key:
+
 ```bash
-.venv/bin/python -m unittest discover -s tests
+env -u OPENAI_API_KEY .venv/bin/python -m unittest discover -s tests
+go test ./... && go vet ./...
 ```
 
-All tests mock the OpenAI API. The database tests need steps 2–3; they write inside transactions that are rolled back (or delete only their own rows), and are skipped if PostgreSQL is not reachable.
+| Needs | For |
+|-------|-----|
+| `.venv` with `requirements.txt` (step 4) | All Python tests |
+| The tiktoken encoding, downloaded on first use and cached | Chunking and ingest tests |
+| Go 1.22+ and the module download (`go.mod`) | Go tests |
+| PostgreSQL running (step 2) with the schema (step 3) and `./.env` (step 1) | Database tests in Python and in `internal/store` |
+
+The database tests leave no data behind: they use rolled-back transactions, rows they delete afterwards, or (the full query flow test) a temporary schema they drop.
+
+**Check for skipped tests.** Without a reachable database the database tests are skipped and the run still reports `OK`:
+
+```bash
+env -u OPENAI_API_KEY .venv/bin/python -m unittest discover -s tests -v 2>&1 | grep -c '\.\.\. skipped'   # 0 when everything ran
+go test -v ./internal/store/ | grep -c -- '--- SKIP'                                                   # 0 when everything ran
+```
+
+What the tests cover and why: [part5-testing.md](part5-testing.md).
 
 ## 6. Preview the chunks (no API calls)
 
