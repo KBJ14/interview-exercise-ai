@@ -46,13 +46,13 @@ services:
   # Internal Python RAG service (FastAPI). Not published on the host: only other containers reach
   # it, at http://rag:8000. Local runs (.venv, MCP server) keep using the host-published db port.
   rag:
-    build:
+    build: &rag-build
       context: .
       dockerfile: docker/rag.Dockerfile
     depends_on:
       migrate:
         condition: service_completed_successfully
-    environment:
+    environment: &rag-env
       # Container-side database address; POSTGRES_PORT in .env is the host-published port.
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
@@ -74,6 +74,21 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+
+  # One-shot: ingests the sample documents with the existing CLI, then exits.
+  # Same image and settings as rag. Each file's SHA-256 is checked before any embedding call, so
+  # documents already stored are reported as "skipped" with api_calls=0 and cost nothing; only a
+  # new or changed file is embedded (one OpenAI request per file). A failed file makes it exit 1.
+  # Nothing waits for it: the stack stays up without a key, and `docker compose wait seed`
+  # reports whether seeding succeeded.
+  seed:
+    build: *rag-build
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment: *rag-env
+    entrypoint: ["sh", "-c", "exec python scripts/ingest.py data/documents/*.txt"]
+    restart: "no"
 
   # Public Go REST API. Calls rag over the Compose network and reads/deletes metadata in db.
   api:
