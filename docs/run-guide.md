@@ -28,31 +28,55 @@ sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
 
 ## 2. Start PostgreSQL with pgvector
 
+Docker Compose currently automates the database only: the `db` service and a one-shot `migrate` service. The Python RAG service, the Go API and sample-document seeding are not in Compose yet; run them as in steps 4–10.
+
 ```bash
-docker compose up -d --wait
+docker compose up -d
+docker compose wait migrate   # exit code 0 = schema ready; anything else = see step 3
 ```
 
-`--wait` returns once the healthcheck passes. `docker compose ps` should show the `db` service as `healthy`.
+- `db` reports healthy once PostgreSQL accepts TCP connections; `migrate` starts after that, applies the migrations and exits.
+- Do not use `docker compose up -d --wait` here: it treats the finished one-shot `migrate` container as a failure and exits with 1 even when the migration succeeded. `docker compose wait migrate` returns `migrate`'s own exit code instead.
+- `docker compose ps -a` should show `db` as `healthy` and `migrate` as `Exited (0)`.
+- Inside Compose the database is `db:5432`; `POSTGRES_PORT` in `.env` is only the port published on the host for local tools (tests, MCP server, `go run`).
 
 ## 3. Apply the schema
 
-The schema is not applied automatically. Which file to run depends on the database.
+This happens automatically when step 2 runs; which path applies depends on the data volume.
 
-**New (empty) database**: run `schema.sql` once. It already contains every table and index, so no migration is needed afterwards.
+| Volume | What runs | Result |
+|--------|-----------|--------|
+| **New, empty** | `db` runs `schema.sql` (mounted into `/docker-entrypoint-initdb.d/`) while initializing the data directory, then `migrate` runs `migrations/*.sql` | All tables and indexes from `schema.sql`; each migration finds its change already present and does nothing |
+| **Existing** (has data) | The PostgreSQL image skips `/docker-entrypoint-initdb.d/` because the data directory is not empty, so `schema.sql` is **not** re-applied; only `migrate` runs | Migrations add what an older schema lacks (e.g. `documents_created_at_id_idx`); existing tables and rows are untouched |
 
-```bash
-docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < schema.sql
+`migrate` (`docker/migrate.sh`) applies the files in `migrations/` in file-name order with `psql -v ON_ERROR_STOP=1` and stops at the first error. There is no table recording which migrations ran, so every migration must be safe to re-run: `001` is a no-op when the index exists with the expected definition and fails when an index of that name has a different one.
+
+Expected `migrate` log (`docker compose logs migrate`):
+
+```
+migrate: applying 001_documents_created_at_id_idx.sql
+NOTICE:  documents_created_at_id_idx already exists with the expected definition; nothing to do
+migrate: done (1 file(s))
 ```
 
-Expected: `CREATE TABLE` twice, `CREATE INDEX` twice, `COMMIT`. Running it again on the same database fails because the tables already exist.
+(`NOTICE: created documents_created_at_id_idx` instead on a database from an earlier schema.)
 
-**Existing database created from an earlier `schema.sql`**: do not re-run `schema.sql`; apply the files in `migrations/` in order. Each one adds only what is missing and stops with an error if it finds a conflicting definition.
+If `docker compose wait migrate` returns non-zero:
+
+| Check | Command |
+|-------|---------|
+| The failing statement and message | `docker compose logs migrate` (e.g. `ERROR: documents_created_at_id_idx exists with a different definition: …`) |
+| Whether `db` is healthy and whether first-time initialization failed | `docker compose ps -a`, `docker compose logs db` (look for `running /docker-entrypoint-initdb.d/001-schema.sql` and `init process complete`) |
+| Re-run after fixing the cause | `docker compose up -d --force-recreate migrate && docker compose wait migrate` |
+
+A failed initialization of a new volume leaves a partially initialized data directory; for a volume that holds no data yet, remove it with `docker compose down -v` and start again. Never run `down -v` on a volume whose documents you want to keep: it deletes them.
+
+Applying the files by hand still works and is what Compose does:
 
 ```bash
+docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < schema.sql   # empty database only
 docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < migrations/001_documents_created_at_id_idx.sql
 ```
-
-Expected: `NOTICE: created documents_created_at_id_idx`, or `... already exists with the expected definition; nothing to do` when it is already there (safe to re-run).
 
 ## 4. Create the Python environment
 

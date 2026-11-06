@@ -7,15 +7,41 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
+      # Host-side port for local tools (.venv tests, MCP server, go run); containers use db:5432.
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       # Named volume keeps data across container restarts; `docker compose down -v` wipes it
       - pgdata:/var/lib/postgresql/data
+      # The image runs /docker-entrypoint-initdb.d only when the data directory is empty, so this
+      # creates the schema for a new volume and is ignored for an existing one.
+      - ./schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      # Checked over TCP: during first-time initialization the image runs a temporary server that
+      # listens only on the Unix socket, so a socket check could pass before the schema exists.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # One-shot: applies migrations/*.sql in file-name order once db is healthy, then exits.
+  # Covers databases created from an earlier schema.sql; every migration must be safe to re-run.
+  migrate:
+    image: pgvector/pgvector:pg17  # same image as db: has psql, nothing extra to download
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # libpq settings read by psql; the container-side address, not the host-published port.
+      PGHOST: db
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+    volumes:
+      - ./migrations:/migrations:ro
+      - ./docker/migrate.sh:/usr/local/bin/migrate.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/migrate.sh"]
+    restart: "no"
 
 volumes:
   pgdata:
