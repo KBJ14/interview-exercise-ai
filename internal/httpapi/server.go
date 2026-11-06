@@ -26,11 +26,13 @@ type Server struct {
 func NewServer(rag RAGClient, docs DocumentStore, log *slog.Logger) http.Handler {
 	s := &Server{rag: rag, docs: docs, log: log}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("POST /query", s.handleQuery)
 	mux.HandleFunc("POST /ingest", s.handleIngest)
 	mux.HandleFunc("GET /documents", s.handleListDocuments)
 	mux.HandleFunc("DELETE /documents/{id}", s.handleDeleteDocument)
 	// Without these, ServeMux answers 404/405 in plain text; keep the JSON error shape everywhere.
+	mux.HandleFunc("/health", methodNotAllowed(http.MethodGet, http.MethodHead))
 	mux.HandleFunc("/query", methodNotAllowed(http.MethodPost))
 	mux.HandleFunc("/ingest", methodNotAllowed(http.MethodPost))
 	mux.HandleFunc("/documents", methodNotAllowed(http.MethodGet, http.MethodHead))
@@ -74,6 +76,13 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toResponse(ans))
+}
+
+// handleHealth is liveness only: it answers from this process and deliberately calls neither the
+// database, the Python service nor OpenAI, so a container healthcheck never costs a request.
+// It does not say whether queries will succeed.
+func handleHealth(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func toResponse(a *ragclient.Answer) QueryResponse {

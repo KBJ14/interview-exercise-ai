@@ -28,12 +28,12 @@ sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
 
 ## 2. Start PostgreSQL with pgvector
 
-Docker Compose currently runs three services: `db`, a one-shot `migrate`, and the internal Python RAG service `rag`. The Go API and sample-document seeding are not in Compose yet; run the Go API as in step 10 and ingest as in step 7.
+Docker Compose currently runs four services: `db`, a one-shot `migrate`, the internal Python RAG service `rag`, and the Go API `api`. **Sample-document seeding is not in Compose yet**: a new volume starts empty, so ingest the samples as in step 7 (or through `POST /ingest`).
 
-Build the `rag` image the first time (downloads the Python base image and packages):
+Build the images the first time (downloads the Python, Go and Alpine base images, packages and Go modules):
 
 ```bash
-docker compose build rag
+docker compose build
 ```
 
 Start and check:
@@ -41,18 +41,31 @@ Start and check:
 ```bash
 docker compose up -d
 docker compose wait migrate   # exit code 0 = schema ready; anything else = see step 3
-docker compose ps -a          # db: healthy, migrate: Exited (0), rag: healthy (may show "starting" for a few seconds)
+docker compose ps -a          # db, rag, api: healthy; migrate: Exited (0) (rag/api may show "starting" for a few seconds)
+curl -s http://127.0.0.1:8080/health      # {"status":"ok"}
+curl -s http://127.0.0.1:8080/documents   # {"documents":[...]}; [] on a new, unseeded volume
 ```
 
-- Order: `db` becomes healthy once PostgreSQL accepts TCP connections; `migrate` then applies the migrations and exits; `rag` starts only after `migrate` exited with 0.
+- Order: `db` becomes healthy once PostgreSQL accepts TCP connections; `migrate` then applies the migrations and exits; `rag` starts after `migrate` exited with 0; `api` starts once `db` is healthy, `migrate` succeeded and `rag` is healthy.
 - Do not use `docker compose up -d --wait`: it treats the finished one-shot `migrate` container as a failure and exits with 1 even when everything succeeded. `docker compose wait migrate` returns `migrate`'s own exit code instead.
-- Inside Compose the database is `db:5432`; `POSTGRES_PORT` in `.env` is only the port published on the host for local tools (tests, MCP server, `go run`).
+- Inside Compose the database is `db:5432` and the Python service `http://rag:8000`. `POSTGRES_PORT` and `API_PORT` in `.env` are only the ports published on the host.
+- **Healthy is not the same as working end to end.** The healthchecks (`GET /health` on `rag` and `api`) only confirm that each process answers HTTP; they call neither the database, the other service nor OpenAI. A healthy stack can still fail queries because the key is missing or invalid, or return no sources because no documents are ingested yet. `GET /documents` shows whether documents exist; a keyless `POST /query` returns 502 `rag_service_error` (the Python side reports `configuration_error`).
 
-After changing Python code, `requirements.txt` or the sample documents, rebuild and restart only `rag`:
+After changing source code, dependencies or the sample documents, rebuild and restart only the affected service:
 
 ```bash
-docker compose build rag && docker compose up -d rag
+docker compose build rag && docker compose up -d rag   # rag/, scripts/ingest.py, requirements.txt, data/documents/
+docker compose build api && docker compose up -d api   # cmd/, internal/, go.mod, go.sum
 ```
+
+**Port conflicts.** The host ports are `POSTGRES_PORT` (default 5432) for `db` and `API_PORT` (default 8080, bound to 127.0.0.1) for `api`; `rag` publishes nothing. If `docker compose up` reports `port is already allocated`, for example because `go run ./cmd/api` is also listening on 8080, set another value in `.env` (e.g. `API_PORT=18080`) and run `docker compose up -d` again.
+
+### The `api` container
+
+- Built in two stages: a static binary from the Go 1.22 toolchain (`GOTOOLCHAIN=local`, `CGO_ENABLED=0`), copied alone into an Alpine image with CA certificates; it runs as an unprivileged user.
+- Gets `API_ADDR=:8080`, `RAG_SERVICE_URL=http://rag:8000` and the `POSTGRES_*` settings with `POSTGRES_HOST=db`, `POSTGRES_PORT=5432`. It never receives the OpenAI key.
+- Published on `127.0.0.1:${API_PORT}` only, so it is reachable from this machine but not from the network.
+- The local `go run ./cmd/api` (step 10) still works; stop the container or change `API_PORT` if both should run at the same time.
 
 ### The `rag` container
 
@@ -182,6 +195,8 @@ Optional settings: `RAG_GENERATION_MODEL` (default `gpt-6-luna`), `RAG_REASONING
 
 The public API is a Go server. `POST /ingest` and `POST /query` validate requests and forward them to the Python service (`POST /internal/ingest`, `POST /internal/query`); `GET /documents` and `DELETE /documents/{id}` work directly on the same PostgreSQL database. Parsing, chunking, embedding and storing a new document happen only in Python, in one transaction.
 It needs Go 1.22+; the only third-party dependency is the PostgreSQL driver `github.com/jackc/pgx/v5` (v5.7.4, the newest release that supports Go 1.22).
+
+With Docker, `docker compose up -d` (step 2) already runs both services; the commands below run them on the host instead, for development.
 
 Start the Python service (port 8000) and the Go API (port 8080) in two terminals:
 

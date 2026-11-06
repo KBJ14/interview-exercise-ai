@@ -75,5 +75,38 @@ services:
       retries: 10
       start_period: 10s
 
+  # Public Go REST API. Calls rag over the Compose network and reads/deletes metadata in db.
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      rag:
+        condition: service_healthy
+    environment:
+      API_ADDR: ":8080"
+      RAG_SERVICE_URL: http://rag:8000
+      # Container-side database address; POSTGRES_PORT in .env is the host-published port.
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # No OPENAI_API_KEY: only the rag service talks to OpenAI.
+    ports:
+      # Published on the loopback interface only; change API_PORT in .env if 8080 is taken.
+      - "127.0.0.1:${API_PORT:-8080}:8080"
+    healthcheck:
+      # GET /health answers from the Go process alone (no DB, Python or OpenAI call).
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
 volumes:
   pgdata:
